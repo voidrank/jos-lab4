@@ -281,7 +281,14 @@ mem_init_mp(void)
 	//     Permissions: kernel RW, user NONE
 	//
 	// LAB 4: Your code here:
+	int i;
+	uintptr_t stacktop;
 
+	stacktop = KSTACKTOP;
+	for (i = 0; i < NCPU; i++) {
+		boot_map_region(kern_pgdir, stacktop - KSTKSIZE, KSTKSIZE, PADDR(percpu_kstacks[i]), PTE_W | PTE_P);
+		stacktop -= (KSTKSIZE + KSTKGAP);
+	}
 }
 
 // --------------------------------------------------------------
@@ -337,7 +344,17 @@ page_init(void)
 	pages[0].pp_link = NULL;
 
 	// base memory
-	for (i = 1; i < npages_basemem; i++) {
+	assert(MPENTRY_PADDR % PGSIZE == 0 && MPENTRY_PADDR / PGSIZE < npages_basemem);
+	for (i = 1; i < MPENTRY_PADDR / PGSIZE; i++) {
+		pages[i].pp_ref = 0;
+		pages[i].pp_link = page_free_list;
+		page_free_list = &pages[i];
+	}
+
+	pages[MPENTRY_PADDR/PGSIZE].pp_ref = 0;
+	pages[MPENTRY_PADDR/PGSIZE].pp_link = NULL;
+
+	for (i = MPENTRY_PADDR / PGSIZE + 1; i < npages_basemem; i++) {
 		pages[i].pp_ref = 0;
 		pages[i].pp_link = page_free_list;
 		page_free_list = &pages[i];
@@ -546,13 +563,16 @@ page_insert(pde_t *pgdir, struct PageInfo *pp, void *va, int perm)
   new_paddr = page2pa(pp);
   mapped = *target_pte & PTE_P;
 
-  if (mapped && old_paddr != new_paddr) {
-    page_remove(pgdir, va);
+  if (mapped) {
+	  if (old_paddr == new_paddr) {
+		  tlb_invalidate(pgdir, va);
+		  pp->pp_ref--;
+	  } else {
+		  page_remove(pgdir, va);
+	  }
   }
 
-  if (!(mapped && old_paddr == new_paddr)) {
-    pp->pp_ref++;
-  }
+  pp->pp_ref++;
 
   *target_pte = new_paddr | perm | PTE_P;
   
@@ -675,7 +695,19 @@ mmio_map_region(physaddr_t pa, size_t size)
 	// Hint: The staff solution uses boot_map_region.
 	//
 	// Your code here:
-	panic("mmio_map_region not implemented");
+	uintptr_t result = base;
+
+	assert(pa % PGSIZE == 0);
+	size_t rsize = ROUNDUP(size, PGSIZE);
+
+	if (base + rsize > MMIOLIM)
+		panic("mmio_map_region overflow!");
+	
+	boot_map_region(kern_pgdir, base, rsize, pa, PTE_PCD|PTE_PWT|PTE_W);
+
+	base += rsize;
+	//panic("mmio_map_region not implemented");
+	return (void *)result;
 }
 
 static uintptr_t user_mem_check_addr;
@@ -736,7 +768,7 @@ user_mem_check(struct Env *env, const void *va, size_t len, int perm)
 void
 user_mem_assert(struct Env *env, const void *va, size_t len, int perm)
 {
-	if (user_mem_check(env, va, len, perm | PTE_U) < 0) {
+	if (user_mem_check(env, va, len, perm | PTE_U | PTE_P) < 0) {
 		cprintf("[%08x] user_mem_check assertion failure for "
 			"va %08x\n", env->env_id, user_mem_check_addr);
 		env_destroy(env);	// may not return
