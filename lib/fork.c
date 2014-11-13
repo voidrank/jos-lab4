@@ -89,7 +89,7 @@ duppage(envid_t envid, unsigned pn)
 					panic("sys_page_map: %e", r);	
 			} else {
 				assert((uvpt[pn] & PTE_U) == PTE_U);
-				if ((r = sys_page_map(0, (void *)(pn*PGSIZE), envid, (void *)(pn*PGSIZE), uvpt[pn] & 0xFFF)) < 0)
+				if ((r = sys_page_map(0, (void *)(pn*PGSIZE), envid, (void *)(pn*PGSIZE), uvpt[pn] & PTE_SYSCALL)) < 0)
 					panic("sys_page_map: %e", r);
 			}
 		}
